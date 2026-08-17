@@ -8,11 +8,14 @@
 #
 # Set SKIP_DB_PULL=1 to skip pre-downloading the database images.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 BOLD=$(tput bold 2>/dev/null || true)
 RESET=$(tput sgr0 2>/dev/null || true)
 step() { printf '\n%s==> %s%s\n' "$BOLD" "$1" "$RESET"; }
+log()  { printf -- '  -> %s\n' "$1"; }
+# on any failure, print exactly which command died and where before exiting
+trap 'printf "\n%s*** FAILED at line %s: %s%s\n" "$BOLD" "$LINENO" "$BASH_COMMAND" "$RESET" >&2' ERR
 
 # ---------------------------------------------------------------- sanity checks
 if [[ $EUID -eq 0 ]]; then
@@ -50,15 +53,21 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 GIT_NAME=""
-while [[ -z $GIT_NAME ]]; do
-    read -rp "Git user.name${CUR_NAME:+ [$CUR_NAME]}: " GIT_NAME
-    GIT_NAME=${GIT_NAME:-$CUR_NAME}
-done
 GIT_EMAIL=""
-while [[ -z $GIT_EMAIL ]]; do
-    read -rp "Git user.email${CUR_EMAIL:+ [$CUR_EMAIL]}: " GIT_EMAIL
-    GIT_EMAIL=${GIT_EMAIL:-$CUR_EMAIL}
-done
+if [[ -n $CUR_NAME && -n $CUR_EMAIL ]]; then
+    echo "git already configured ($CUR_NAME <$CUR_EMAIL>) — skipping git identity prompts."
+    GIT_NAME=$CUR_NAME
+    GIT_EMAIL=$CUR_EMAIL
+else
+    while [[ -z $GIT_NAME ]]; do
+        read -rp "Git user.name${CUR_NAME:+ [$CUR_NAME]}: " GIT_NAME
+        GIT_NAME=${GIT_NAME:-$CUR_NAME}
+    done
+    while [[ -z $GIT_EMAIL ]]; do
+        read -rp "Git user.email${CUR_EMAIL:+ [$CUR_EMAIL]}: " GIT_EMAIL
+        GIT_EMAIL=${GIT_EMAIL:-$CUR_EMAIL}
+    done
+fi
 
 # git credential to store for HTTPS remotes (GitHub/GitLab require a token, not
 # your account password)
@@ -68,7 +77,9 @@ GIT_TOKEN=""
 if [[ -f $HOME/.git-credentials ]]; then
     echo "~/.git-credentials already exists — skipping git credential prompt."
 else
-    read -rp "Git host [github.com]: " GIT_HOST
+    echo "Git host: the server your HTTPS token belongs to, e.g. github.com,"
+    echo "gitlab.com, bitbucket.org or a self-hosted domain (git.mycompany.com)."
+    read -rp "Git host (Enter for github.com): " GIT_HOST
     GIT_HOST=${GIT_HOST:-github.com}
     while [[ -z $GIT_LOGIN ]]; do
         read -rp "Git login (your username on $GIT_HOST): " GIT_LOGIN
@@ -108,15 +119,20 @@ echo "All input collected — the rest is unattended. Go grab a coffee."
 
 # ---------------------------------------------------------------- base system
 step "Updating package index and installing prerequisites"
+log "apt-get update"
 sudo apt-get update
+log "apt-get upgrade"
 sudo apt-get -y upgrade
+log "apt-get install prerequisites (curl, gnupg, jq, ...)"
 sudo apt-get -y install ca-certificates curl wget gnupg jq apt-transport-https \
     software-properties-common unzip
 
 step "Enabling extra repository components (needed for Steam)"
 if [[ $ID == ubuntu ]]; then
+    log "add-apt-repository multiverse"
     sudo add-apt-repository -y multiverse
 else
+    log "enabling contrib/non-free components in apt sources"
     if [[ -f /etc/apt/sources.list.d/debian.sources ]]; then
         sudo sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' \
             /etc/apt/sources.list.d/debian.sources
@@ -124,48 +140,59 @@ else
         sudo sed -i -E 's/^(deb .*main)$/\1 contrib non-free/' /etc/apt/sources.list
     fi
 fi
+log "dpkg --add-architecture i386"
 sudo dpkg --add-architecture i386
+log "apt-get update"
 sudo apt-get update
 
 # ---------------------------------------------------------------- git
 step "Installing and configuring git"
+log "apt-get install git"
 sudo apt-get -y install git
+log "git config --global (name, email, default branch, credential helper)"
 git config --global user.name "$GIT_NAME"
 git config --global user.email "$GIT_EMAIL"
 git config --global init.defaultBranch main
 git config --global credential.helper store
 if [[ -n $GIT_TOKEN ]]; then
+    log "writing ~/.git-credentials"
     printf 'https://%s:%s@%s\n' "$GIT_LOGIN" "$GIT_TOKEN" "$GIT_HOST" > "$HOME/.git-credentials"
     chmod 600 "$HOME/.git-credentials"
 fi
 
 # ---------------------------------------------------------------- openvpn
 step "Installing OpenVPN client"
+log "apt-get install openvpn network-manager-openvpn"
 sudo apt-get -y install openvpn network-manager-openvpn network-manager-openvpn-gnome
 
 # ---------------------------------------------------------------- project dirs
 step "Creating project directories under \$HOME/Projects"
+log "mkdir -p ~/Projects/{littleTaller,AKI,Personal}"
 mkdir -p "$HOME/Projects/littleTaller" "$HOME/Projects/AKI" "$HOME/Projects/Personal"
 
 # ---------------------------------------------------------------- google chrome
 step "Installing Google Chrome"
 if ! command -v google-chrome >/dev/null 2>&1; then
+    log "adding Google Chrome apt repo + key"
     curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
         | sudo gpg --dearmor --yes -o /usr/share/keyrings/google-chrome.gpg
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
         | sudo tee /etc/apt/sources.list.d/google-chrome.list >/dev/null
     sudo apt-get update
+    log "apt-get install google-chrome-stable"
     sudo apt-get -y install google-chrome-stable
 fi
 
 # ---------------------------------------------------------------- brave
 step "Installing Brave browser"
 if ! command -v brave-browser >/dev/null 2>&1; then
+    log "adding Brave apt repo + key"
     sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg \
         https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
     echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
         | sudo tee /etc/apt/sources.list.d/brave-browser-release.list >/dev/null
     sudo apt-get update
+    log "apt-get install brave-browser"
     sudo apt-get -y install brave-browser
 fi
 
@@ -175,10 +202,13 @@ fi
 # the user so the IDE's built-in updater works.
 step "Installing PhpStorm (official tarball)"
 if [[ ! -x /opt/phpstorm/bin/phpstorm.sh ]]; then
+    log "querying latest PhpStorm release URL"
     PS_URL=$(curl -fsSL 'https://data.services.jetbrains.com/products/releases?code=PS&latest=true&type=release' \
         | jq -r '.PS[0].downloads.linux.link')
     TMP=$(mktemp -d)
+    log "downloading PhpStorm tarball"
     curl -fL "$PS_URL" -o "$TMP/phpstorm.tar.gz"
+    log "extracting PhpStorm to /opt/phpstorm"
     tar -xzf "$TMP/phpstorm.tar.gz" -C "$TMP"
     PS_DIR=$(find "$TMP" -maxdepth 1 -type d -name 'PhpStorm-*' | head -n1)
     sudo mv "$PS_DIR" /opt/phpstorm
@@ -201,11 +231,13 @@ fi
 # ---------------------------------------------------------------- slack
 step "Installing Slack"
 if ! command -v slack >/dev/null 2>&1; then
+    log "adding Slack apt repo + key"
     curl -fsSL https://packagecloud.io/slacktechnologies/slack/gpgkey \
         | sudo gpg --dearmor --yes -o /usr/share/keyrings/slack.gpg
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/slack.gpg] https://packagecloud.io/slacktechnologies/slack/debian/ jessie main" \
         | sudo tee /etc/apt/sources.list.d/slack.list >/dev/null
     sudo apt-get update
+    log "apt-get install slack-desktop"
     sudo apt-get -y install slack-desktop
 fi
 
@@ -213,7 +245,9 @@ fi
 step "Installing Postman (official tarball)"
 if [[ ! -d /opt/Postman ]]; then
     TMP=$(mktemp -d)
+    log "downloading Postman tarball"
     curl -fL https://dl.pstmn.io/download/latest/linux_64 -o "$TMP/postman.tar.gz"
+    log "extracting Postman to /opt"
     sudo tar -xzf "$TMP/postman.tar.gz" -C /opt
     sudo chown -R "$USER": /opt/Postman
     sudo ln -sf /opt/Postman/Postman /usr/local/bin/postman
@@ -230,48 +264,51 @@ Terminal=false
 DESKTOP
 fi
 
-# ---------------------------------------------------------------- claude code
-step "Installing Claude Code CLI"
-if ! command -v claude >/dev/null 2>&1; then
-    curl -fsSL https://claude.ai/install.sh | bash
-fi
-
 # ---------------------------------------------------------------- steam
 step "Installing Steam"
 # pre-accept the Steam license so the install stays non-interactive
+log "pre-accepting Steam license via debconf"
 echo "steam steam/question select I AGREE" | sudo debconf-set-selections
 echo "steam steam/license note ''" | sudo debconf-set-selections
+log "apt-get install steam-installer (falls back to steam)"
 sudo apt-get -y install steam-installer || sudo apt-get -y install steam
 
 # ---------------------------------------------------------------- dbeaver
 step "Installing DBeaver Community"
 if ! command -v dbeaver >/dev/null 2>&1; then
+    log "adding DBeaver apt repo + key"
     curl -fsSL https://dbeaver.io/debs/dbeaver.gpg.key \
         | sudo gpg --dearmor --yes -o /usr/share/keyrings/dbeaver.gpg
     echo "deb [signed-by=/usr/share/keyrings/dbeaver.gpg] https://dbeaver.io/debs/dbeaver-ce /" \
         | sudo tee /etc/apt/sources.list.d/dbeaver.list >/dev/null
     sudo apt-get update
+    log "apt-get install dbeaver-ce"
     sudo apt-get -y install dbeaver-ce
 fi
 
 # ---------------------------------------------------------------- docker engine
 step "Installing Docker Engine + compose plugin"
 if ! command -v docker >/dev/null 2>&1; then
+    log "adding Docker apt repo + key"
     sudo install -m 0755 -d /etc/apt/keyrings
     sudo curl -fsSL "https://download.docker.com/linux/${ID}/gpg" -o /etc/apt/keyrings/docker.asc
     sudo chmod a+r /etc/apt/keyrings/docker.asc
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/${ID} ${CODENAME} stable" \
         | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
     sudo apt-get update
+    log "apt-get install docker-ce + plugins"
     sudo apt-get -y install docker-ce docker-ce-cli containerd.io \
         docker-buildx-plugin docker-compose-plugin
 fi
 # the docker daemon autostarts on boot; the database containers below do NOT
+log "systemctl enable --now docker"
 sudo systemctl enable --now docker
+log "usermod -aG docker $USER"
 sudo usermod -aG docker "$USER"
 
 # ---------------------------------------------------------------- databases
 step "Setting up database stack (MySQL, Postgres, MSSQL) in $DB_DIR"
+log "writing $DB_DIR/docker-compose.yml"
 mkdir -p "$DB_DIR"
 # no restart policy on any service: only the docker daemon autostarts on boot,
 # databases are started manually with `docker compose up -d <service>`
@@ -335,14 +372,24 @@ volumes:
 COMPOSE
 
 if [[ ! -f $DB_DIR/.env ]]; then
+    log "writing $DB_DIR/.env"
     printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD" > "$DB_DIR/.env"
 fi
 chmod 600 "$DB_DIR/.env"
 
+log "docker compose config -q (validating compose file)"
 sudo docker compose -f "$DB_DIR/docker-compose.yml" config -q
 if [[ ${SKIP_DB_PULL:-0} != 1 ]]; then
     echo "Pre-downloading database images (set SKIP_DB_PULL=1 to skip)..."
+    log "docker compose pull"
     sudo docker compose -f "$DB_DIR/docker-compose.yml" pull
+fi
+
+# ---------------------------------------------------------------- claude code
+step "Installing Claude Code CLI"
+if ! command -v claude >/dev/null 2>&1; then
+    log "curl https://claude.ai/install.sh | bash"
+    curl -fsSL https://claude.ai/install.sh | bash
 fi
 
 # ---------------------------------------------------------------- done

@@ -8,11 +8,14 @@
 #
 # Set SKIP_DB_PULL=1 to skip pre-downloading the database images.
 
-set -euo pipefail
+set -Eeuo pipefail
 
 BOLD=$(tput bold 2>/dev/null || true)
 RESET=$(tput sgr0 2>/dev/null || true)
 step() { printf '\n%s==> %s%s\n' "$BOLD" "$1" "$RESET"; }
+log()  { printf -- '  -> %s\n' "$1"; }
+# on any failure, print exactly which command died and where before exiting
+trap 'printf "\n%s*** FAILED at line %s: %s%s\n" "$BOLD" "$LINENO" "$BASH_COMMAND" "$RESET" >&2' ERR
 
 # ---------------------------------------------------------------- sanity checks
 if [[ $EUID -eq 0 ]]; then
@@ -43,15 +46,21 @@ if command -v git >/dev/null 2>&1; then
 fi
 
 GIT_NAME=""
-while [[ -z $GIT_NAME ]]; do
-    read -rp "Git user.name${CUR_NAME:+ [$CUR_NAME]}: " GIT_NAME
-    GIT_NAME=${GIT_NAME:-$CUR_NAME}
-done
 GIT_EMAIL=""
-while [[ -z $GIT_EMAIL ]]; do
-    read -rp "Git user.email${CUR_EMAIL:+ [$CUR_EMAIL]}: " GIT_EMAIL
-    GIT_EMAIL=${GIT_EMAIL:-$CUR_EMAIL}
-done
+if [[ -n $CUR_NAME && -n $CUR_EMAIL ]]; then
+    echo "git already configured ($CUR_NAME <$CUR_EMAIL>) — skipping git identity prompts."
+    GIT_NAME=$CUR_NAME
+    GIT_EMAIL=$CUR_EMAIL
+else
+    while [[ -z $GIT_NAME ]]; do
+        read -rp "Git user.name${CUR_NAME:+ [$CUR_NAME]}: " GIT_NAME
+        GIT_NAME=${GIT_NAME:-$CUR_NAME}
+    done
+    while [[ -z $GIT_EMAIL ]]; do
+        read -rp "Git user.email${CUR_EMAIL:+ [$CUR_EMAIL]}: " GIT_EMAIL
+        GIT_EMAIL=${GIT_EMAIL:-$CUR_EMAIL}
+    done
+fi
 
 # git credential to store for HTTPS remotes (GitHub/GitLab require a token, not
 # your account password)
@@ -61,7 +70,9 @@ GIT_TOKEN=""
 if [[ -f $HOME/.git-credentials ]]; then
     echo "~/.git-credentials already exists — skipping git credential prompt."
 else
-    read -rp "Git host [github.com]: " GIT_HOST
+    echo "Git host: the server your HTTPS token belongs to, e.g. github.com,"
+    echo "gitlab.com, bitbucket.org or a self-hosted domain (git.mycompany.com)."
+    read -rp "Git host (Enter for github.com): " GIT_HOST
     GIT_HOST=${GIT_HOST:-github.com}
     while [[ -z $GIT_LOGIN ]]; do
         read -rp "Git login (your username on $GIT_HOST): " GIT_LOGIN
@@ -101,16 +112,20 @@ echo "All input collected — the rest is unattended. Go grab a coffee."
 
 # ---------------------------------------------------------------- base system
 step "Updating system and installing base packages"
+log "pacman -Syu (full system upgrade)"
 sudo pacman -Syu --noconfirm
+log "pacman -S base-devel git curl wget unzip"
 sudo pacman -S --needed --noconfirm base-devel git curl wget unzip
 
 # ---------------------------------------------------------------- git config
 step "Configuring git"
+log "git config --global (name, email, default branch, credential helper)"
 git config --global user.name "$GIT_NAME"
 git config --global user.email "$GIT_EMAIL"
 git config --global init.defaultBranch main
 git config --global credential.helper store
 if [[ -n $GIT_TOKEN ]]; then
+    log "writing ~/.git-credentials"
     printf 'https://%s:%s@%s\n' "$GIT_LOGIN" "$GIT_TOKEN" "$GIT_HOST" > "$HOME/.git-credentials"
     chmod 600 "$HOME/.git-credentials"
 fi
@@ -119,17 +134,21 @@ fi
 step "Installing yay (AUR helper)"
 if ! command -v yay >/dev/null 2>&1; then
     TMP=$(mktemp -d)
+    log "git clone yay-bin from the AUR"
     git clone https://aur.archlinux.org/yay-bin.git "$TMP/yay-bin"
+    log "makepkg -si (build and install yay)"
     ( cd "$TMP/yay-bin" && makepkg -si --noconfirm )
     rm -rf "$TMP"
 fi
 
 # ---------------------------------------------------------------- openvpn
 step "Installing OpenVPN client"
+log "pacman -S openvpn networkmanager-openvpn"
 sudo pacman -S --needed --noconfirm openvpn networkmanager-openvpn
 
 # ---------------------------------------------------------------- project dirs
 step "Creating project directories under \$HOME/Projects"
+log "mkdir -p ~/Projects/{littleTaller,AKI,Personal}"
 mkdir -p "$HOME/Projects/littleTaller" "$HOME/Projects/AKI" "$HOME/Projects/Personal"
 
 # ---------------------------------------------------------------- desktop apps (AUR)
@@ -137,36 +156,39 @@ mkdir -p "$HOME/Projects/littleTaller" "$HOME/Projects/AKI" "$HOME/Projects/Pers
 # The AUR 'phpstorm' package repacks the official tarball — same no-snap install
 # JetBrains recommends, but updates arrive through yay like everything else.
 step "Installing Chrome, Brave, PhpStorm, Slack and Postman from the AUR"
+log "yay -S google-chrome brave-bin phpstorm slack-desktop postman-bin"
 yay -S --needed --noconfirm --removemake \
     google-chrome brave-bin phpstorm slack-desktop postman-bin
-
-# ---------------------------------------------------------------- claude code
-step "Installing Claude Code CLI"
-if ! command -v claude >/dev/null 2>&1; then
-    curl -fsSL https://claude.ai/install.sh | bash
-fi
 
 # ---------------------------------------------------------------- steam
 step "Installing Steam (enabling multilib repo)"
 if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+    log "enabling [multilib] in /etc/pacman.conf"
     sudo sed -i '/^#\[multilib\]/,/^#Include = \/etc\/pacman.d\/mirrorlist/ s/^#//' /etc/pacman.conf
+    log "pacman -Syu (refresh with multilib enabled)"
     sudo pacman -Syu --noconfirm
 fi
+log "pacman -S steam"
 sudo pacman -S --needed --noconfirm steam
 
 # ---------------------------------------------------------------- dbeaver
 step "Installing DBeaver Community"
+log "pacman -S dbeaver"
 sudo pacman -S --needed --noconfirm dbeaver
 
 # ---------------------------------------------------------------- docker engine
 step "Installing Docker Engine + compose plugin"
+log "pacman -S docker docker-compose docker-buildx"
 sudo pacman -S --needed --noconfirm docker docker-compose docker-buildx
 # the docker daemon autostarts on boot; the database containers below do NOT
+log "systemctl enable --now docker.service"
 sudo systemctl enable --now docker.service
+log "usermod -aG docker $USER"
 sudo usermod -aG docker "$USER"
 
 # ---------------------------------------------------------------- databases
 step "Setting up database stack (MySQL, Postgres, MSSQL) in $DB_DIR"
+log "writing $DB_DIR/docker-compose.yml"
 mkdir -p "$DB_DIR"
 # no restart policy on any service: only the docker daemon autostarts on boot,
 # databases are started manually with `docker compose up -d <service>`
@@ -230,14 +252,24 @@ volumes:
 COMPOSE
 
 if [[ ! -f $DB_DIR/.env ]]; then
+    log "writing $DB_DIR/.env"
     printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD" > "$DB_DIR/.env"
 fi
 chmod 600 "$DB_DIR/.env"
 
+log "docker compose config -q (validating compose file)"
 sudo docker compose -f "$DB_DIR/docker-compose.yml" config -q
 if [[ ${SKIP_DB_PULL:-0} != 1 ]]; then
     echo "Pre-downloading database images (set SKIP_DB_PULL=1 to skip)..."
+    log "docker compose pull"
     sudo docker compose -f "$DB_DIR/docker-compose.yml" pull
+fi
+
+# ---------------------------------------------------------------- claude code
+step "Installing Claude Code CLI"
+if ! command -v claude >/dev/null 2>&1; then
+    log "curl https://claude.ai/install.sh | bash"
+    curl -fsSL https://claude.ai/install.sh | bash
 fi
 
 # ---------------------------------------------------------------- done
