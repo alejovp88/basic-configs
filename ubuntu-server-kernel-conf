@@ -42,3 +42,5 @@ echo " RECOMIENDO: Descarga JetBrains Toolbox y DBeaver (.tar.gz)"
 echo " manualmente desde sus webs oficiales para evitar daemons."
 echo " Por favor, reinicia tu laptop para aplicar los cambios."
 echo "=========================================================="
+
+sudo reboot
