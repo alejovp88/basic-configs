@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# Detener el script si ocurre algún error
+set -e
+
+echo "=== 1. Actualizando el sistema ==="
+sudo apt update && sudo apt upgrade -y
+
+echo "=== 2. Instalando GNOME Ultra-Mínimo ==="
+# Instala solo la sesión base de GNOME y la herramienta de ajustes (Tweaks) sin bloatware
+sudo apt install --no-install-recommends -y gnome-session gnome-terminal gdm3 gnome-control-center gnome-tweaks
+
+echo "=== 3. Instalando Kernel XanMod (Optimizado x86-64-v3) ==="
+sudo wget -qO - https://xanmod.org | sudo gpg --dearmor --yes -o /usr/share/keyrings/xanmod-archive-keyring.gpg
+echo 'deb [signed-by=/usr/share/keyrings/xanmod-archive-keyring.gpg] http://xanmod.org releases main' | sudo tee /etc/apt/sources.list.d/xanmod-kernel.list
+sudo apt update && sudo apt install -y linux-xanmod-x86-64-v3
+
+echo "=== 4. Configurando Gráficos Híbridos (Intel/NVIDIA) y CUDA ==="
+sudo apt install -y nvidia-driver-535 nvidia-utils-535 system76-power
+sudo system76-power graphics hybrid
+
+echo "=== 5. Instalando Stack de Desarrollo Básicos (Sin recomendados) ==="
+sudo apt install --no-install-recommends -y git openjdk-17-jdk openjdk-17-jre php-cli php-mbstring unzip
+
+echo "=== 6. Instalando Composer ==="
+curl -sS https://getcomposer.org | php
+sudo mv composer.phar /usr/local/bin/composer
+
+echo "=== 7. Instalando Docker Engine Nativo ==="
+sudo apt install -y docker.io docker-compose
+sudo usermod -aG docker $USER
+
+echo "=== 8. Instalando Ollama para IA Local ==="
+curl -fsSL https://ollama.com | sh
+
+echo "=== 9. Optimizando RAM con ZRAM (Estilo CachyOS) ==="
+sudo apt install -y zram-config
+
+echo "=========================================================="
+echo " ¡Configuración completada con éxito!"
+echo " RECOMIENDO: Descarga JetBrains Toolbox y DBeaver (.tar.gz)"
+echo " manualmente desde sus webs oficiales para evitar daemons."
+echo " Por favor, reinicia tu laptop para aplicar los cambios."
+echo "=========================================================="
