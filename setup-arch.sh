@@ -143,8 +143,34 @@ fi
 
 # ---------------------------------------------------------------- openvpn
 step "Installing OpenVPN client"
+# https://www.youtube.com/watch?v=GB5qZWVnkD4&t=183s reference
 log "pacman -S openvpn networkmanager-openvpn"
-sudo pacman -S --needed --noconfirm openvpn networkmanager-openvpn
+sudo pacman -Sy --needed --noconfirm networkmanager networkmanager-openvpn  network-manager-applet openvpn
+sudo systemctl enable NetworkManager.service
+sudo systemctl start NetworkManager.service
+sudo mkdir -p /etc/sysctl.d/
+ip link
+
+sudo nano /etc/sysctl.d/40-ipv6.conf
+# info should be inside the file
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+net.ipv6.conf.tun0.disable_ipv6=1
+net.ipv6.conf.wlan0.disable_ipv6=1 #depends from ip link info
+
+sudo systemctl restart systemd-sysctl.service
+sudo systemctl restart NetworkManager.service
+
+cd /etc/openvpn
+# copy the keys into the /etc/openvpn dir
+nmcli connection import type openvpn file nombre_del_archivo
+
+sudo systemctl restart systemd-sysctl.service
+sudo systemctl restart NetworkManager.service
+
+# test in dnsleaktest.com
+
 
 # ---------------------------------------------------------------- project dirs
 step "Creating project directories under \$HOME/Projects"
